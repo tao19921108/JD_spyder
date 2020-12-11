@@ -7,6 +7,7 @@ from datetime import datetime
 from tqdm import tqdm
 import pandas as pd
 import sqlalchemy
+import time
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -31,8 +32,10 @@ def get_good_urls(page):
     p = page * 2 - 1
     good_urls = []
     for it in range(p, p + 2):
-
-        url = f'https://search.jd.com/Search?keyword=%E7%94%B5%E8%A7%86&qrst=1&wq=%E7%94%B5%E8%A7%86&stock=1&page={page}&s=1&click=0'
+        # url = "https://search.jd.com/Search?keyword=" + keyword + "&enc=utf-8&qrst=1&rt=1&stop=1&vt=1&stock=1&page=" + str(
+        #     it) + "&s=" + str(1 + (it - 1) * 30) + "&click=0&scrolling=y"
+        url = f'https://search.jd.com/Search?keyword=%E7%94%B5%E8%A7%86&qrst=1&wq=%E7%94%B5%E8%A7%86&stock=1&page={it}' \
+              f'&s={str(1 + (it - 1) * 30)}&click=0'
         headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.100 Safari/537.36'
         }
@@ -47,13 +50,12 @@ def get_good_urls(page):
                 good_urls.append("https:" + j)
 
     data = []
-    with open("test.csv", "a", newline="") as csvfile:
-        rows = ("商品名称", "商品价格", "商品链接")
-        writer = csv.writer(csvfile)
-        writer.writerow(rows)
-
     for i in tqdm(good_urls):
-        data.append(get_information(i))
+        try:
+            data.append(get_information(i))
+            # time.sleep(10)
+        except Exception as e:
+            print(e)
 
     filed_word = ['时间','店铺名称','商品名称','价格','屏幕尺寸','分辨率','链接']
     key_words = data[0].keys()
@@ -105,6 +107,8 @@ def get_information(url):
 
     response.encoding = response.apparent_encoding
     html = etree.HTML(response.text)
+    with open('temp.html', 'w') as f:
+        f.write(response.text)
     goodsname = html.xpath('//*[@id="detail"]/div[2]/div[1]/div[1]/ul[2]/li[1]/text()')
     good_store = html.xpath('//*[@id="crumb-wrap"]/div/div[2]/div[2]/div[1]/div/a/text()')
     screen_size = html.xpath('//*[@id="detail"]/div[2]/div[1]/div[1]/ul[2]/li[5]/text()')
@@ -130,8 +134,10 @@ def get_information(url):
 
 
 def save_data(data_df):
+    assert isinstance(data_df, pd.DataFrame)
     # 建立数据库连接
     engine = sqlalchemy.create_engine(f'mysql+pymysql://{args.user}:{args.password}@{args.host}/{args.database}?charset=utf8')
+    data_df.drop_duplicates(inplace=True)
     data_df.to_sql(args.table, engine, index=False, if_exists='append')
     print('数据已存入数据库！')
 
@@ -141,7 +147,7 @@ def main():
 
 
 if __name__ == "__main__":
-    schedluler1 = BlockingScheduler()
-    schedluler1.add_job(main, trigger='cron', hour='17,20,22', minute='5', id='job1', max_instances=1)
-    schedluler1.start()
-
+    # schedluler1 = BlockingScheduler()
+    # schedluler1.add_job(main, trigger='cron', hour='17,20,22', minute='5', id='job1', max_instances=1)
+    # schedluler1.start()
+    main()
