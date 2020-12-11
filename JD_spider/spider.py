@@ -2,18 +2,42 @@ import json
 import requests
 from lxml import etree
 import csv
+from argparse import ArgumentParser
+from datetime import datetime
+from tqdm import tqdm
+import pandas as pd
+import sqlalchemy
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 
 
-def get_good_urls(keyword, page):
+parser = ArgumentParser(description=__doc__)
+parser.add_argument('--page', type=int, default=2, help="number of page")
+parser.add_argument('--host', type=str, default='localhost', help='mysql host')
+parser.add_argument('--database', type=str, default='dod_formarketing', help='database')
+parser.add_argument('--table', type=str, default='pricefromjd', help='table name')
+parser.add_argument('--user', type=str, default='root', help='user name')
+parser.add_argument('--password', type=str, default='tao04111065', help='password')
+
+args = parser.parse_args()
+print(' ' * 50 + 'Options')
+print('*' * 100)
+for key, value in vars(args).items():
+    print(f'{key}:\t{value}')
+print('*' * 100)
+
+
+def get_good_urls(page):
     p = page * 2 - 1
     good_urls = []
     for it in range(p, p + 2):
-        url = "https://search.jd.com/Search?keyword=" + keyword + "&enc=utf-8&qrst=1&rt=1&stop=1&vt=1&stock=1&page=" + str(
-            it) + "&s=" + str(1 + (it - 1) * 30) + "&click=0&scrolling=y"
+
+        url = f'https://search.jd.com/Search?keyword=%E7%94%B5%E8%A7%86&qrst=1&wq=%E7%94%B5%E8%A7%86&stock=1&page={page}&s=1&click=0'
         headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.100 Safari/537.36'
         }
         response = requests.get(url, headers=headers, timeout=30)
+        assert response.status_code == 200
         response.encoding = response.apparent_encoding
         html = etree.HTML(response.text)
         for j in html.xpath('//*[@id="J_goodsList"]/ul/li/div/div[1]/a/@href'):
@@ -22,14 +46,21 @@ def get_good_urls(keyword, page):
             else:
                 good_urls.append("https:" + j)
 
-    goodlist = []
+    data = []
     with open("test.csv", "a", newline="") as csvfile:
         rows = ("商品名称", "商品价格", "商品链接")
         writer = csv.writer(csvfile)
         writer.writerow(rows)
 
-    for i in good_urls:
-        goodlist.append(get_information(i))
+    for i in tqdm(good_urls):
+        data.append(get_information(i))
+
+    filed_word = ['时间','店铺名称','商品名称','价格','屏幕尺寸','分辨率','链接']
+    key_words = data[0].keys()
+    values = [item.values() for item in data]
+    data_df = pd.DataFrame(values, columns=key_words)
+    data_df = data_df.reindex(columns=filed_word)
+    save_data(data_df)
 
     return good_urls
 
@@ -67,21 +98,50 @@ def get_information(url):
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.100 Safari/537.36'
     }
     response = requests.get(url, headers=headers, timeout=30)
+    timestamp = datetime.now()
+    if response.status_code != 200:
+        print('爬取失败%s' % timestamp)
+        return
+
     response.encoding = response.apparent_encoding
     html = etree.HTML(response.text)
     goodsname = html.xpath('//*[@id="detail"]/div[2]/div[1]/div[1]/ul[2]/li[1]/text()')
-    goodstore = html.xpath('//*[@id="crumb-wrap"]/div/div[2]/div[2]/div[1]/div/a/text()')
-    price = get_price(sid)
-    name = str(goodsname[0]).split("：")[1]
-    goodlist = [name, price, url]
-    goodlist_detail = ["商品：" + name, "价格：" + price, "链接：" + url]
-    with open("test.csv", "a", newline="") as csvfile:
-        rows = (name, price, url)
-        writer = csv.writer(csvfile)
-        writer.writerow(rows)
-        print(goodlist)
+    good_store = html.xpath('//*[@id="crumb-wrap"]/div/div[2]/div[2]/div[1]/div/a/text()')
+    screen_size = html.xpath('//*[@id="detail"]/div[2]/div[1]/div[1]/ul[2]/li[5]/text()')
+    resolution_ratio = html.xpath('//*[@id="detail"]/div[2]/div[1]/div[1]/ul[2]/li[7]/text()')
+
+    # 字符串处理
+    good_store = good_store[0]
+    good_price = get_price(sid)
+    good_name = str(goodsname[0]).split("：")[1]
+    resolution_ratio = resolution_ratio[0].strip().split(':')[-1]
+    screen_size = screen_size[0].strip().split(':')[-1]
+
+    info = {
+        '店铺名称': good_store,
+        '商品名称': good_name,
+        '价格': good_price,
+        '屏幕尺寸': screen_size,
+        '分辨率': resolution_ratio,
+        '链接': url,
+        '时间': timestamp
+    }
+    return info
+
+
+def save_data(data_df):
+    # 建立数据库连接
+    engine = sqlalchemy.create_engine(f'mysql+pymysql://{args.user}:{args.password}@{args.host}/{args.database}?charset=utf8')
+    data_df.to_sql(args.table, engine, index=False, if_exists='append')
+    print('数据已存入数据库！')
+
+def main():
+    for i in range(1, args.page + 1):
+        get_good_urls(i)
 
 
 if __name__ == "__main__":
-    for i in range(1, 2):
-        get_good_urls("ipad", i)
+    schedluler1 = BlockingScheduler()
+    schedluler1.add_job(main, trigger='cron', hour='17,20,22', minute='5', id='job1', max_instances=1)
+    schedluler1.start()
+
